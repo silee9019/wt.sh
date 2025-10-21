@@ -1,0 +1,218 @@
+#compdef wt
+
+local _wt_marker_cache_dir=""
+local _wt_marker_cache_repo=""
+
+_wt_find_marker_base() {
+  local dir=$PWD
+  while [[ $dir != "/" ]]; do
+    if [[ -f "$dir/.wt" ]]; then
+      REPLY=$dir
+      return 0
+    fi
+    dir=${dir:h}
+  done
+  return 1
+}
+
+_wt_parse_marker_value() {
+  local key=$1
+  local marker
+  if ! _wt_find_marker_base; then
+    return 1
+  fi
+  marker="$REPLY/.wt"
+  local value
+  value=$(awk -v KEY="$key" '
+    /^[[:space:]]*#/ { next }
+    /^[[:space:]]*$/ { next }
+    {
+      sub(/\r$/, "", $0)
+    }
+    $0 ~ "^[[:space:]]*" KEY ":" {
+      sub("^[[:space:]]*" KEY ":[[:space:]]*", "", $0)
+      print
+      exit
+    }
+  ' "$marker" 2>/dev/null)
+  if [[ -n "$value" ]]; then
+    REPLY=$value
+    return 0
+  fi
+  return 1
+}
+
+_wt_repo_dir() {
+  if [[ -n "$_wt_marker_cache_repo" && -n "$_wt_marker_cache_dir" ]]; then
+    if [[ "$PWD" == $_wt_marker_cache_dir* ]]; then
+      REPLY=$_wt_marker_cache_repo
+      return 0
+    fi
+  fi
+
+  local base repo
+  if ! _wt_find_marker_base; then
+    return 1
+  fi
+  base=$REPLY
+
+  if ! _wt_parse_marker_value repo; then
+    return 1
+  fi
+  repo=$REPLY
+  if [[ "$repo" != /* ]]; then
+    repo="$base/$repo"
+  fi
+
+  _wt_marker_cache_dir="$base"
+  _wt_marker_cache_repo="$repo"
+  REPLY="$repo"
+  return 0
+}
+
+_wt_relative_paths() {
+  local base
+  if _wt_find_marker_base; then
+    base=$REPLY
+    _files -W "$base" -/
+  else
+    _files -/
+  fi
+}
+
+_wt_repository_paths() {
+  _files -/
+}
+
+_wt_worktree_dirs() {
+  local base
+  if ! _wt_find_marker_base; then
+    return 1
+  fi
+  base=$REPLY
+  local -a paths entries
+  paths=("${(@f)$(wt list --porcelain 2>/dev/null | awk '/^worktree /{print $2}')}")
+  (( $#paths )) || return 1
+
+  local path rel desc
+  for path in $paths; do
+    if [[ "$path" == "$base" ]]; then
+      continue
+    elif [[ "$path" == ${base}/* ]]; then
+      rel=${path#$base/}
+      desc=$path
+    else
+      rel=$path
+      desc=$path
+    fi
+    entries+=("$rel:$desc")
+  done
+
+  _describe -t worktrees 'worktree directory' entries
+}
+
+_wt_git_refs() {
+  local repo
+  if ! _wt_repo_dir; then
+    return 1
+  fi
+  repo=$REPLY
+  local -a refs
+  refs=("${(@f)$(git -C "$repo" for-each-ref --format='%(refname:short)' refs/heads refs/remotes 2>/dev/null)}")
+  (( $#refs )) || return 1
+  compadd "$@" -a refs
+}
+
+_wt_commands=(
+  'list:List registered worktree directories'
+  'ls:Alias for list'
+  'l:Alias for list'
+  'create:Create a new worktree'
+  'add:Alias for create'
+  'new:Alias for create'
+  'c:Alias for create'
+  'remove:Remove a worktree directory'
+  'rm:Alias for remove'
+  'delete:Alias for remove'
+  'del:Alias for remove'
+  'r:Alias for remove'
+  'move:Move or rename a worktree directory'
+  'mv:Alias for move'
+  'update:Alias for move'
+  'm:Alias for move'
+  'prune:Prune stale worktree metadata'
+  'p:Alias for prune'
+  'init:Mark or update the worktree base directory'
+  'help:Show help'
+  '-h:Show help'
+  '--help:Show help'
+)
+
+_wt() {
+  local curcontext="$curcontext" state ret=1
+  typeset -A opt_args
+
+  _arguments -C \
+    '1:command:->cmds' \
+    '*::arg:->args' && ret=0
+
+  case $state in
+    cmds)
+      _describe -t commands 'wt command' _wt_commands
+      ret=0
+      ;;
+    args)
+      local cmd=${words[2]}
+      case $cmd in
+        list|ls|l)
+          _arguments \
+            '--porcelain[Output in porcelain format]' \
+            '--help[Show usage information]' && ret=0
+          ;;
+        create|add|new|c)
+          _arguments -C \
+            '--path[Directory for the new worktree]:directory:_wt_relative_paths' \
+            '--from[Starting point for the branch]:ref:_wt_git_refs' \
+            '--force[Force creation if branch exists]' \
+            '--help[Show usage information]' \
+            '1:branch name:_wt_git_refs' \
+            '2::directory:_wt_relative_paths' && ret=0
+          ;;
+        remove|rm|delete|del|r)
+          _arguments \
+            '--force[Force removal even if dirty]' \
+            '--help[Show usage information]' \
+            '1:worktree directory:_wt_worktree_dirs' && ret=0
+          ;;
+        move|mv|update|m)
+          _arguments \
+            '--help[Show usage information]' \
+            '1:worktree directory:_wt_worktree_dirs' \
+            '2:destination directory:_wt_relative_paths' && ret=0
+          ;;
+        prune|p)
+          _arguments \
+            '--dry-run[Report what would be pruned]' \
+            '--help[Show usage information]' && ret=0
+          ;;
+        init)
+          _arguments \
+            '--repo[Explicit repository path]:repository:_wt_repository_paths' \
+            '--help[Show usage information]' \
+            '1::base directory:_files -/' && ret=0
+          ;;
+        help|-h|--help)
+          _describe -t commands 'wt command' _wt_commands
+          ret=0
+          ;;
+        *)
+          ret=1
+          ;;
+      esac
+      ;;
+  esac
+
+  return ret
+}
+
+_wt "$@"

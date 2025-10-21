@@ -30,33 +30,47 @@ Commands:
   list|ls|l [--porcelain]         List registered worktrees.
   create|add|new|c <branch> [--path DIR] [--from REF] [--force]
                                   Create a worktree (new branch if missing).
-  remove|rm|delete|del|r <path|branch> [--force]
-                                  Remove a worktree by path or branch name.
-  move|mv|update|m <path|branch> <new-path>
+  remove|rm|delete|del|r <dir> [--force]
+                                  Remove a worktree directory.
+  move|mv|update|m <dir> <new-path>
                                   Move/rename a worktree directory.
   prune|p [--dry-run]             Prune stale worktree metadata.
-  init [dir]                      Mark a directory for new worktrees (defaults to ".").
+  init [dir] [--repo PATH]        Mark a directory for new worktrees; supply --repo when outside the repo.
   help|-h|--help                  Show this help message.
 ```
 
 ### Common workflows
 
 - `wt ls` — inspect existing worktrees
-- `wt new feature/login` — create a worktree for a new branch (auto-creates branch if missing)
-- `wt rm feature/login` — remove a worktree by branch name or path
-- `wt mv feature/login ~/src/login-worktree` — move a worktree to a new location
+- `wt new feature/login` — create a worktree for a new branch (auto-creates branch if missing; directory defaults to the branch name)
+- `wt rm release-hub-p001` — remove a worktree by directory name
+- `wt mv release-hub-p001 hub-p001` — move/rename a worktree directory within the base
 - `wt prune --dry-run` — check for stale worktree records without deleting anything
-- `wt init` — mark the current directory as the default worktree home
+- `wt init` — mark the current directory as the worktree home (auto-detects the primary repo when possible)
 
 ## Configuration
 
-- `WORKTREE_BASE`: temporarily override the default directory used for new worktrees.
-- `wt init <dir>`: persist a default base directory and create a `.wt` marker (omit `<dir>` to use the current directory).
-- `.wt`: marker file placed in the chosen base directory; keep it with the worktrees so the tool can find the repository again.
+- `wt init [dir] --repo /path/to/repo`: create or update the `.wt` marker that links a base directory to the primary repository (defaults to the current directory when `dir` is omitted; without `--repo`, the command attempts to auto-detect a repository within the base directory).
+- `.wt`: YAML marker file placed in the chosen base directory; any descendant directory can run `wt` and will use the closest marker it finds.
 
-By default, new worktrees are created under the script directory using a sanitized version of the branch name; run `wt init [dir]` once to change that default and drop a `.wt` marker in the target directory. Pass `--path` to place a single worktree anywhere else.
+All commands require a `.wt` marker. The marker's directory becomes the default location for new worktrees; use `--path` with `wt new` if you need a one-off destination elsewhere.
 
 ## Requirements
 
 - Bash 4+
 - Git with worktree support (Git 2.5+)
+
+## Shell completion
+
+### zsh
+
+1. Copy or symlink `completions/_wt` into a directory listed in your `fpath` (e.g. `~/.zsh/completions/_wt`).
+2. Ensure that directory is in `fpath`, for example:
+   ```zsh
+   fpath=(~/.zsh/completions $fpath)
+   ```
+3. Reload completion definitions:
+   ```zsh
+   autoload -Uz compinit && compinit
+   ```
+4. Restart your shell (or `exec zsh`) and tab-completion for `wt` should now offer commands, options, branches, and worktree directories.

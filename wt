@@ -5,7 +5,11 @@ set -euo pipefail
 SCRIPT_PATH="$0"
 SCRIPT_NAME="$(basename "$SCRIPT_PATH")"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_FILE="$SCRIPT_DIR/.wtconfig"
+
+MARKER_DIR=""
+MARKER_FILE=""
+WORKTREE_BASE_DIR=""
+REPO_DIR=""
 
 die() {
   echo "$SCRIPT_NAME: $*" >&2
@@ -17,21 +21,27 @@ print_usage() {
 Usage: $SCRIPT_NAME <command> [options]
 
 Commands:
-  list|ls|l [--porcelain]         List registered worktrees.
+  list|ls|l [--porcelain]         List registered worktree directories.
   create|add|new|c <branch> [--path DIR] [--from REF] [--force]
-                                  Create a worktree (new branch if missing).
-  remove|rm|delete|del|r <path|branch> [--force]
-                                  Remove a worktree by path or branch name.
-  move|mv|update|m <path|branch> <new-path>
+                                  Create a new worktree (branch required).
+  remove|rm|delete|del|r <dir> [--force]
+                                  Remove a worktree directory.
+  move|mv|update|m <dir> <new-path>
                                   Move/rename a worktree directory.
   prune|p [--dry-run]             Prune stale worktree metadata.
-  init [dir]                      Mark a directory for new worktrees (defaults to ".").
+  init [dir] [--repo PATH]        Mark a directory for new worktrees; supply --repo when outside the repo.
   help|-h|--help                  Show this help message.
 
-Environment:
-  WORKTREE_REPO  Override auto-detected primary worktree directory.
-  WORKTREE_BASE  Override the base directory for new worktrees.
+Markers:
+  .wt            Created by init; identifies the base directory and primary repo.
 EOF
+}
+
+trim_whitespace() {
+  local str="$1"
+  str="${str#"${str%%[![:space:]]*}"}"
+  str="${str%"${str##*[![:space:]]}"}"
+  printf '%s' "$str"
 }
 
 find_marker_base() {
@@ -53,85 +63,144 @@ find_marker_base() {
   return 1
 }
 
-resolve_repo_dir() {
-  local repo_dir="${WORKTREE_REPO:-}"
+parse_marker_file() {
+  local dir="$1"
+  local marker="$dir/.wt"
+  [[ -f "$marker" ]] || die "Marker file '$marker' is missing."
 
-  if [[ -n "$repo_dir" ]]; then
-    [[ -d "$repo_dir/.git" ]] || die "WORKTREE_REPO '$repo_dir' is not a git worktree."
-    echo "$(cd "$repo_dir" && pwd)"
-    return
+  local base_path=""
+  local repo_path=""
+  local line key value
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%%#*}"
+    line="${line%%$'\r'}"
+    line="$(trim_whitespace "$line")"
+    [[ -z "$line" ]] && continue
+
+    key="${line%%:*}"
+    value="${line#*:}"
+    [[ "$key" == "$value" ]] && die "Malformed marker line in '$marker': $line"
+    key="$(trim_whitespace "$key")"
+    value="$(trim_whitespace "$value")"
+
+    case "$key" in
+      base)
+        base_path="$value"
+        ;;
+      repo)
+        repo_path="$value"
+        ;;
+    esac
+  done <"$marker"
+
+  [[ -n "$repo_path" ]] || die "Marker file '$marker' does not specify a repository (missing 'repo:')."
+
+  if [[ -n "$base_path" ]]; then
+    if [[ "$base_path" != /* ]]; then
+      base_path="$(cd "$dir" && cd "$base_path" 2>/dev/null && pwd)" || die "Unable to resolve base path '$base_path' from marker."
+    else
+      base_path="$(cd "$base_path" 2>/dev/null && pwd)" || die "Base path '$base_path' in marker is not accessible."
+    fi
+    if [[ "$base_path" != "$dir" ]]; then
+      die "Marker base '$base_path' does not match marker location '$dir'."
+    fi
   fi
+
+  if [[ "$repo_path" != /* ]]; then
+    repo_path="$(cd "$dir" && cd "$repo_path" 2>/dev/null && pwd)" || die "Unable to resolve repo path '$repo_path' from marker."
+  else
+    repo_path="$(cd "$repo_path" 2>/dev/null && pwd)" || die "Repository path '$repo_path' in marker is not accessible."
+  fi
+
+  [[ -e "$repo_path/.git" ]] || die "Repository '$repo_path' is not a git worktree (missing .git)."
+
+  MARKER_DIR="$dir"
+  MARKER_FILE="$marker"
+  WORKTREE_BASE_DIR="$dir"
+  REPO_DIR="$repo_path"
+}
+
+ensure_marker_loaded() {
+  [[ -n "$REPO_DIR" ]] && return
+
+  local marker_base=""
+  if ! marker_base="$(find_marker_base "$PWD")"; then
+    die "No .wt marker found. Run '$SCRIPT_NAME init' first."
+  fi
+
+  parse_marker_file "$marker_base"
+}
+
+auto_detect_repo_dir() {
+  local base_dir="$1"
 
   if git rev-parse --show-toplevel >/dev/null 2>&1; then
     echo "$(git rev-parse --show-toplevel)"
-    return
+    return 0
   fi
 
-  local marker_base=""
-  if marker_base="$(find_marker_base "$PWD")"; then
-    local marker_file="$marker_base/.wt"
-    if [[ -f "$marker_file" ]]; then
-      local repo_path=""
-      while IFS='=' read -r key value; do
-        case "$key" in
-          repo)
-            repo_path="$value"
-            ;;
-        esac
-      done <"$marker_file"
+  local candidates=()
+  local dir_candidates=()
 
-      if [[ -n "$repo_path" && -d "$repo_path/.git" ]]; then
-        echo "$(cd "$repo_path" && pwd)"
-        return
-      fi
+  if [[ -e "$base_dir/.git" ]]; then
+    candidates+=("$(cd "$base_dir" && pwd)")
+    if [[ -d "$base_dir/.git" ]]; then
+      dir_candidates+=("$(cd "$base_dir" && pwd)")
     fi
   fi
 
-  local candidate
-  for candidate in "$SCRIPT_DIR"/*; do
-    if [[ -d "$candidate/.git" && -d "$candidate/.git/worktrees" ]]; then
-      echo "$(cd "$candidate" && pwd)"
-      return
+  local entry
+  for entry in "$base_dir"/*; do
+    [[ -d "$entry" ]] || continue
+    [[ -e "$entry/.git" ]] || continue
+    candidates+=("$(cd "$entry" && pwd)")
+    if [[ -d "$entry/.git" ]]; then
+      dir_candidates+=("$(cd "$entry" && pwd)")
     fi
   done
 
-  die "Unable to locate git repository. Set WORKTREE_REPO to the primary worktree directory."
+  if [[ "${#dir_candidates[@]}" -eq 1 ]]; then
+    echo "${dir_candidates[0]}"
+    return 0
+  fi
+
+  if [[ "${#dir_candidates[@]}" -gt 1 ]]; then
+    die "Multiple repositories (with dedicated .git directories) detected in '$base_dir'. Re-run with --repo PATH."
+  fi
+
+  case "${#candidates[@]}" in
+    0)
+      return 1
+      ;;
+    1)
+      echo "${candidates[0]}"
+      return 0
+      ;;
+    *)
+      die "Multiple repositories detected in '$base_dir'. Re-run with --repo PATH."
+      ;;
+  esac
 }
 
-REPO_DIR="$(resolve_repo_dir)"
-load_worktree_base_dir() {
-  local override="${WORKTREE_BASE:-}"
+write_marker_file() {
+  local base_dir="$1"
+  local repo_dir="$2"
+  local marker="$base_dir/.wt"
 
-  if [[ -n "$override" ]]; then
-    [[ -d "$override" ]] || die "WORKTREE_BASE '$override' does not exist."
-    echo "$(cd "$override" && pwd)"
-    return
-  fi
+  cat >"$marker" <<EOF
+# wt base marker
+base: $base_dir
+repo: $repo_dir
+EOF
 
-  local marker_base=""
-  if marker_base="$(find_marker_base "$PWD")"; then
-    echo "$marker_base"
-    return
-  fi
-
-  if [[ -f "$CONFIG_FILE" ]]; then
-    local stored
-    stored="$(<"$CONFIG_FILE")"
-    if [[ -n "$stored" ]]; then
-      if [[ -d "$stored" && -f "$stored/.wt" ]]; then
-        echo "$(cd "$stored" && pwd)"
-        return
-      fi
-      die "Configured worktree directory '$stored' is invalid. Run '$SCRIPT_NAME init <dir>' to update it."
-    fi
-  fi
-
-  echo "$SCRIPT_DIR"
+  MARKER_DIR="$base_dir"
+  MARKER_FILE="$marker"
+  WORKTREE_BASE_DIR="$base_dir"
+  REPO_DIR="$repo_dir"
 }
-
-WORKTREE_BASE_DIR="$(load_worktree_base_dir)"
 
 git_cmd() {
+  ensure_marker_loaded
   git -C "$REPO_DIR" "$@"
 }
 
@@ -156,6 +225,8 @@ sanitize_path() {
 resolve_worktree_path() {
   local input="$1"
 
+  ensure_marker_loaded
+
   if [[ -d "$input" ]]; then
     (cd "$input" && pwd)
     return
@@ -166,36 +237,17 @@ resolve_worktree_path() {
     return
   fi
 
-  if [[ "$WORKTREE_BASE_DIR" != "$SCRIPT_DIR" && -d "$SCRIPT_DIR/$input" ]]; then
-    (cd "$SCRIPT_DIR/$input" && pwd)
-    return
-  fi
-
-  local current_path=""
-  local branch_name=""
-  while IFS= read -r line; do
-    case "$line" in
-      worktree\ *)
-        current_path="${line#worktree }"
-        ;;
-      branch\ refs/heads/*)
-        branch_name="${line#branch refs/heads/}"
-        if [[ "$branch_name" == "$input" ]]; then
-          echo "$current_path"
-          return
-        fi
-        ;;
-    esac
-  done < <(git_cmd worktree list --porcelain)
-
-  die "No worktree found for '$input'."
+  die "No worktree directory found for '$input'."
 }
 
 cmd_list() {
+  ensure_marker_loaded
   git_cmd worktree list "$@"
 }
 
 cmd_create() {
+  ensure_marker_loaded
+
   local branch=""
   local start_point=""
   local target_path=""
@@ -290,7 +342,7 @@ cmd_remove() {
     esac
   done
 
-  [[ -n "$target" ]] || die "Worktree path or branch is required."
+  [[ -n "$target" ]] || die "Worktree directory is required."
 
   local resolved
   resolved="$(resolve_worktree_path "$target")"
@@ -299,6 +351,8 @@ cmd_remove() {
 }
 
 cmd_move() {
+  ensure_marker_loaded
+
   [[ $# -ge 1 ]] || die "Source worktree is required."
   local source="$1"
   shift
@@ -316,40 +370,67 @@ cmd_move() {
 }
 
 cmd_prune() {
+  ensure_marker_loaded
   git_cmd worktree prune "$@"
 }
 
 cmd_init() {
-  local target="${1:-$PWD}"
+  local base_arg=""
+  local repo_arg=""
 
-  if [[ "$target" != /* ]]; then
-    target="$PWD/$target"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --repo)
+        [[ $# -ge 2 ]] || die "--repo requires a path."
+        repo_arg="$2"
+        shift 2
+        ;;
+      --help|-h)
+        print_usage
+        exit 0
+        ;;
+      -*)
+        die "Unknown option '$1' for init."
+        ;;
+      *)
+        if [[ -n "$base_arg" ]]; then
+          die "Multiple base directories provided."
+        fi
+        base_arg="$1"
+        shift
+        ;;
+    esac
+  done
+
+  local base_dir="${base_arg:-$PWD}"
+  if [[ "$base_dir" != /* ]]; then
+    base_dir="$PWD/$base_dir"
+  fi
+  mkdir -p "$base_dir" || die "Failed to create directory '$base_dir'."
+  base_dir="$(cd "$base_dir" && pwd)"
+
+  local repo_dir=""
+  if [[ -n "$repo_arg" ]]; then
+    if [[ "$repo_arg" != /* ]]; then
+      repo_arg="$PWD/$repo_arg"
+    fi
+    repo_dir="$(cd "$repo_arg" 2>/dev/null && pwd)" || die "Unable to resolve repository path '$repo_arg'."
+  else
+    if ! repo_dir="$(auto_detect_repo_dir "$base_dir")"; then
+      die "Unable to detect git repository automatically. Run '$SCRIPT_NAME init [dir] --repo /path/to/repo'."
+    fi
   fi
 
-  mkdir -p "$target" || die "Failed to create directory '$target'."
+  [[ -e "$repo_dir/.git" ]] || die "Repository '$repo_dir' is not a git worktree (missing .git)."
 
-  local absolute
-  absolute="$(cd "$target" && pwd)"
-
-  local marker="$absolute/.wt"
-
+  local marker="$base_dir/.wt"
   if [[ -e "$marker" && ! -f "$marker" ]]; then
     die "Cannot place marker at '$marker'; remove or rename the existing entry."
   fi
 
-  cat >"$marker" <<EOF
-# wt base marker
-base=$absolute
-repo=$REPO_DIR
-EOF
+  write_marker_file "$base_dir" "$repo_dir"
 
-  printf '%s\n' "$absolute" >"$CONFIG_FILE"
-  WORKTREE_BASE_DIR="$absolute"
-  echo "Marked $absolute for new worktrees."
-
-  if [[ -n "${WORKTREE_BASE:-}" ]]; then
-    echo "$SCRIPT_NAME: Note: WORKTREE_BASE is set; it overrides the saved directory for this invocation." >&2
-  fi
+  echo "Marked $base_dir for new worktrees (repo: $repo_dir)."
 }
 
 main() {
