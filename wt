@@ -2,16 +2,19 @@
 
 set -euo pipefail
 
+SCRIPT_PATH="$0"
+SCRIPT_NAME="$(basename "$SCRIPT_PATH")"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_FILE="$SCRIPT_DIR/.wtconfig"
 
 die() {
-  echo "Error: $*" >&2
+  echo "$SCRIPT_NAME: $*" >&2
   exit 1
 }
 
 print_usage() {
-  cat <<'EOF'
-Usage: worktree <command> [options]
+  cat <<EOF
+Usage: $SCRIPT_NAME <command> [options]
 
 Commands:
   list|ls|l [--porcelain]         List registered worktrees.
@@ -22,11 +25,32 @@ Commands:
   move|mv|update|m <path|branch> <new-path>
                                   Move/rename a worktree directory.
   prune|p [--dry-run]             Prune stale worktree metadata.
+  init [dir]                      Mark a directory for new worktrees (defaults to ".").
   help|-h|--help                  Show this help message.
 
 Environment:
   WORKTREE_REPO  Override auto-detected primary worktree directory.
+  WORKTREE_BASE  Override the base directory for new worktrees.
 EOF
+}
+
+find_marker_base() {
+  local dir="$1"
+
+  while :; do
+    if [[ -f "$dir/.wt" ]]; then
+      (cd "$dir" && pwd)
+      return 0
+    fi
+
+    if [[ "$dir" == "/" ]]; then
+      break
+    fi
+
+    dir="$(dirname "$dir")"
+  done
+
+  return 1
 }
 
 resolve_repo_dir() {
@@ -43,6 +67,26 @@ resolve_repo_dir() {
     return
   fi
 
+  local marker_base=""
+  if marker_base="$(find_marker_base "$PWD")"; then
+    local marker_file="$marker_base/.wt"
+    if [[ -f "$marker_file" ]]; then
+      local repo_path=""
+      while IFS='=' read -r key value; do
+        case "$key" in
+          repo)
+            repo_path="$value"
+            ;;
+        esac
+      done <"$marker_file"
+
+      if [[ -n "$repo_path" && -d "$repo_path/.git" ]]; then
+        echo "$(cd "$repo_path" && pwd)"
+        return
+      fi
+    fi
+  fi
+
   local candidate
   for candidate in "$SCRIPT_DIR"/*; do
     if [[ -d "$candidate/.git" && -d "$candidate/.git/worktrees" ]]; then
@@ -55,6 +99,37 @@ resolve_repo_dir() {
 }
 
 REPO_DIR="$(resolve_repo_dir)"
+load_worktree_base_dir() {
+  local override="${WORKTREE_BASE:-}"
+
+  if [[ -n "$override" ]]; then
+    [[ -d "$override" ]] || die "WORKTREE_BASE '$override' does not exist."
+    echo "$(cd "$override" && pwd)"
+    return
+  fi
+
+  local marker_base=""
+  if marker_base="$(find_marker_base "$PWD")"; then
+    echo "$marker_base"
+    return
+  fi
+
+  if [[ -f "$CONFIG_FILE" ]]; then
+    local stored
+    stored="$(<"$CONFIG_FILE")"
+    if [[ -n "$stored" ]]; then
+      if [[ -d "$stored" && -f "$stored/.wt" ]]; then
+        echo "$(cd "$stored" && pwd)"
+        return
+      fi
+      die "Configured worktree directory '$stored' is invalid. Run '$SCRIPT_NAME init <dir>' to update it."
+    fi
+  fi
+
+  echo "$SCRIPT_DIR"
+}
+
+WORKTREE_BASE_DIR="$(load_worktree_base_dir)"
 
 git_cmd() {
   git -C "$REPO_DIR" "$@"
@@ -86,7 +161,12 @@ resolve_worktree_path() {
     return
   fi
 
-  if [[ -d "$SCRIPT_DIR/$input" ]]; then
+  if [[ -d "$WORKTREE_BASE_DIR/$input" ]]; then
+    (cd "$WORKTREE_BASE_DIR/$input" && pwd)
+    return
+  fi
+
+  if [[ "$WORKTREE_BASE_DIR" != "$SCRIPT_DIR" && -d "$SCRIPT_DIR/$input" ]]; then
     (cd "$SCRIPT_DIR/$input" && pwd)
     return
   fi
@@ -157,9 +237,9 @@ cmd_create() {
   [[ -n "$branch" ]] || die "Branch name is required."
 
   if [[ -z "$target_path" ]]; then
-    target_path="$SCRIPT_DIR/$(sanitize_path "$branch")"
+    target_path="$WORKTREE_BASE_DIR/$(sanitize_path "$branch")"
   elif [[ "$target_path" != /* ]]; then
-    target_path="$SCRIPT_DIR/$target_path"
+    target_path="$WORKTREE_BASE_DIR/$target_path"
   fi
 
   [[ ! -e "$target_path" ]] || die "Target path '$target_path' already exists."
@@ -229,7 +309,7 @@ cmd_move() {
   resolved_source="$(resolve_worktree_path "$source")"
 
   if [[ "$destination" != /* ]]; then
-    destination="$SCRIPT_DIR/$destination"
+    destination="$WORKTREE_BASE_DIR/$destination"
   fi
 
   git_cmd worktree move "$resolved_source" "$destination"
@@ -237,6 +317,39 @@ cmd_move() {
 
 cmd_prune() {
   git_cmd worktree prune "$@"
+}
+
+cmd_init() {
+  local target="${1:-$PWD}"
+
+  if [[ "$target" != /* ]]; then
+    target="$PWD/$target"
+  fi
+
+  mkdir -p "$target" || die "Failed to create directory '$target'."
+
+  local absolute
+  absolute="$(cd "$target" && pwd)"
+
+  local marker="$absolute/.wt"
+
+  if [[ -e "$marker" && ! -f "$marker" ]]; then
+    die "Cannot place marker at '$marker'; remove or rename the existing entry."
+  fi
+
+  cat >"$marker" <<EOF
+# wt base marker
+base=$absolute
+repo=$REPO_DIR
+EOF
+
+  printf '%s\n' "$absolute" >"$CONFIG_FILE"
+  WORKTREE_BASE_DIR="$absolute"
+  echo "Marked $absolute for new worktrees."
+
+  if [[ -n "${WORKTREE_BASE:-}" ]]; then
+    echo "$SCRIPT_NAME: Note: WORKTREE_BASE is set; it overrides the saved directory for this invocation." >&2
+  fi
 }
 
 main() {
@@ -259,11 +372,14 @@ main() {
     prune|p)
       cmd_prune "$@"
       ;;
+    init)
+      cmd_init "$@"
+      ;;
     help|-h|--help)
       print_usage
       ;;
     *)
-      die "Unknown command '$command'. Run 'worktree help' for usage."
+      die "Unknown command '$command'. Run '$SCRIPT_NAME help' for usage."
       ;;
   esac
 }
