@@ -1,0 +1,271 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+die() {
+  echo "Error: $*" >&2
+  exit 1
+}
+
+print_usage() {
+  cat <<'EOF'
+Usage: worktree <command> [options]
+
+Commands:
+  list|ls|l [--porcelain]         List registered worktrees.
+  create|add|new|c <branch> [--path DIR] [--from REF] [--force]
+                                  Create a worktree (new branch if missing).
+  remove|rm|delete|del|r <path|branch> [--force]
+                                  Remove a worktree by path or branch name.
+  move|mv|update|m <path|branch> <new-path>
+                                  Move/rename a worktree directory.
+  prune|p [--dry-run]             Prune stale worktree metadata.
+  help|-h|--help                  Show this help message.
+
+Environment:
+  WORKTREE_REPO  Override auto-detected primary worktree directory.
+EOF
+}
+
+resolve_repo_dir() {
+  local repo_dir="${WORKTREE_REPO:-}"
+
+  if [[ -n "$repo_dir" ]]; then
+    [[ -d "$repo_dir/.git" ]] || die "WORKTREE_REPO '$repo_dir' is not a git worktree."
+    echo "$(cd "$repo_dir" && pwd)"
+    return
+  fi
+
+  if git rev-parse --show-toplevel >/dev/null 2>&1; then
+    echo "$(git rev-parse --show-toplevel)"
+    return
+  fi
+
+  local candidate
+  for candidate in "$SCRIPT_DIR"/*; do
+    if [[ -d "$candidate/.git" && -d "$candidate/.git/worktrees" ]]; then
+      echo "$(cd "$candidate" && pwd)"
+      return
+    fi
+  done
+
+  die "Unable to locate git repository. Set WORKTREE_REPO to the primary worktree directory."
+}
+
+REPO_DIR="$(resolve_repo_dir)"
+
+git_cmd() {
+  git -C "$REPO_DIR" "$@"
+}
+
+default_start_point() {
+  if git_cmd show-ref --verify --quiet "refs/remotes/origin/main"; then
+    echo "origin/main"
+    return
+  fi
+  if git_cmd show-ref --verify --quiet "refs/heads/main"; then
+    echo "main"
+    return
+  fi
+  git_cmd rev-parse --abbrev-ref HEAD
+}
+
+sanitize_path() {
+  local name="$1"
+  name="${name//[^A-Za-z0-9._-]/-}"
+  echo "$name"
+}
+
+resolve_worktree_path() {
+  local input="$1"
+
+  if [[ -d "$input" ]]; then
+    (cd "$input" && pwd)
+    return
+  fi
+
+  if [[ -d "$SCRIPT_DIR/$input" ]]; then
+    (cd "$SCRIPT_DIR/$input" && pwd)
+    return
+  fi
+
+  local current_path=""
+  local branch_name=""
+  while IFS= read -r line; do
+    case "$line" in
+      worktree\ *)
+        current_path="${line#worktree }"
+        ;;
+      branch\ refs/heads/*)
+        branch_name="${line#branch refs/heads/}"
+        if [[ "$branch_name" == "$input" ]]; then
+          echo "$current_path"
+          return
+        fi
+        ;;
+    esac
+  done < <(git_cmd worktree list --porcelain)
+
+  die "No worktree found for '$input'."
+}
+
+cmd_list() {
+  git_cmd worktree list "$@"
+}
+
+cmd_create() {
+  local branch=""
+  local start_point=""
+  local target_path=""
+  local force_flag=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --path)
+        [[ $# -ge 2 ]] || die "--path requires a directory."
+        target_path="$2"
+        shift 2
+        ;;
+      --from)
+        [[ $# -ge 2 ]] || die "--from requires a ref."
+        start_point="$2"
+        shift 2
+        ;;
+      --force)
+        force_flag=(--force)
+        shift
+        ;;
+      --help|-h)
+        print_usage
+        exit 0
+        ;;
+      -*)
+        die "Unknown option '$1' for create."
+        ;;
+      *)
+        if [[ -n "$branch" ]]; then
+          die "Multiple branch names provided."
+        fi
+        branch="$1"
+        shift
+        ;;
+    esac
+  done
+
+  [[ -n "$branch" ]] || die "Branch name is required."
+
+  if [[ -z "$target_path" ]]; then
+    target_path="$SCRIPT_DIR/$(sanitize_path "$branch")"
+  elif [[ "$target_path" != /* ]]; then
+    target_path="$SCRIPT_DIR/$target_path"
+  fi
+
+  [[ ! -e "$target_path" ]] || die "Target path '$target_path' already exists."
+
+  local add_args=("${force_flag[@]}")
+
+  if git_cmd show-ref --verify --quiet "refs/heads/$branch"; then
+    git_cmd worktree add "${add_args[@]}" "$target_path" "$branch"
+    return
+  fi
+
+  if [[ -z "$start_point" ]]; then
+    if git_cmd show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+      start_point="origin/$branch"
+    else
+      start_point="$(default_start_point)"
+    fi
+  fi
+
+  add_args+=(-b "$branch")
+  git_cmd worktree add "${add_args[@]}" "$target_path" "$start_point"
+}
+
+cmd_remove() {
+  local force_flag=()
+  local target=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --force)
+        force_flag=(--force)
+        shift
+        ;;
+      --help|-h)
+        print_usage
+        exit 0
+        ;;
+      -*)
+        die "Unknown option '$1' for remove."
+        ;;
+      *)
+        if [[ -n "$target" ]]; then
+          die "Multiple targets provided."
+        fi
+        target="$1"
+        shift
+        ;;
+    esac
+  done
+
+  [[ -n "$target" ]] || die "Worktree path or branch is required."
+
+  local resolved
+  resolved="$(resolve_worktree_path "$target")"
+
+  git_cmd worktree remove "${force_flag[@]}" "$resolved"
+}
+
+cmd_move() {
+  [[ $# -ge 1 ]] || die "Source worktree is required."
+  local source="$1"
+  shift
+  [[ $# -ge 1 ]] || die "Destination path is required."
+  local destination="$1"
+
+  local resolved_source
+  resolved_source="$(resolve_worktree_path "$source")"
+
+  if [[ "$destination" != /* ]]; then
+    destination="$SCRIPT_DIR/$destination"
+  fi
+
+  git_cmd worktree move "$resolved_source" "$destination"
+}
+
+cmd_prune() {
+  git_cmd worktree prune "$@"
+}
+
+main() {
+  local command="${1:-help}"
+  shift || true
+
+  case "$command" in
+    list|ls|l)
+      cmd_list "$@"
+      ;;
+    create|add|new|c)
+      cmd_create "$@"
+      ;;
+    remove|rm|delete|del|r)
+      cmd_remove "$@"
+      ;;
+    move|mv|update|m)
+      cmd_move "$@"
+      ;;
+    prune|p)
+      cmd_prune "$@"
+      ;;
+    help|-h|--help)
+      print_usage
+      ;;
+    *)
+      die "Unknown command '$command'. Run 'worktree help' for usage."
+      ;;
+  esac
+}
+
+main "$@"
