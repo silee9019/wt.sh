@@ -124,28 +124,13 @@ _wt_git_refs() {
 }
 
 _wt_commands=(
-  'list:List registered worktree directories'
-  'ls:Alias for list'
-  'l:Alias for list'
-  'create:Create a new worktree'
-  'add:Alias for create'
-  'new:Alias for create'
-  'c:Alias for create'
-  'remove:Remove a worktree directory'
-  'rm:Alias for remove'
-  'delete:Alias for remove'
-  'del:Alias for remove'
-  'r:Alias for remove'
-  'move:Move or rename a worktree directory'
-  'mv:Alias for move'
-  'update:Alias for move'
-  'm:Alias for move'
+  'list|ls:List registered worktree directories'
+  'add:Create a new worktree'
+  'remove|rm:Remove a worktree directory'
+  'move|mv:Move or rename a worktree directory'
   'prune:Prune stale worktree metadata'
-  'p:Alias for prune'
   'init:Mark or update the worktree base directory'
-  'help:Show help'
-  '-h:Show help'
-  '--help:Show help'
+  'help|-h|--help:Show help'
 )
 
 _wt() {
@@ -164,12 +149,12 @@ _wt() {
     args)
       local cmd=${words[2]}
       case $cmd in
-        list|ls|l)
+        list|ls)
           _arguments \
             '--porcelain[Output in porcelain format]' \
             '--help[Show usage information]' && ret=0
           ;;
-        create|add|new|c)
+        add)
           _arguments -C \
             '--path[Directory for the new worktree]:directory:_wt_relative_paths' \
             '--from[Starting point for the branch]:ref:_wt_git_refs' \
@@ -178,19 +163,19 @@ _wt() {
             '1:branch name:_wt_git_refs' \
             '2::directory:_wt_relative_paths' && ret=0
           ;;
-        remove|rm|delete|del|r)
+        remove|rm)
           _arguments \
             '--force[Force removal even if dirty]' \
             '--help[Show usage information]' \
             '1:worktree directory:_wt_worktree_dirs' && ret=0
           ;;
-        move|mv|update|m)
+        move|mv)
           _arguments \
             '--help[Show usage information]' \
             '1:worktree directory:_wt_worktree_dirs' \
             '2:destination directory:_wt_relative_paths' && ret=0
           ;;
-        prune|p)
+        prune)
           _arguments \
             '--dry-run[Report what would be pruned]' \
             '--help[Show usage information]' && ret=0

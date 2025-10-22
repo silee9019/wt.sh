@@ -21,14 +21,14 @@ print_usage() {
 Usage: $SCRIPT_NAME <command> [options]
 
 Commands:
-  list|ls|l [--porcelain]         List registered worktree directories.
-  create|add|new|c <branch> [--path DIR] [--from REF] [--force]
+  list|ls [--porcelain]           List registered worktree directories.
+  add <branch> [--path DIR] [--from REF] [--force]
                                   Create a new worktree (branch required).
-  remove|rm|delete|del|r <dir> [--force]
+  remove|rm <dir> [--force]
                                   Remove a worktree directory.
-  move|mv|update|m <dir> <new-path>
+  move|mv <dir> <new-path>
                                   Move/rename a worktree directory.
-  prune|p [--dry-run]             Prune stale worktree metadata.
+  prune [--dry-run]               Prune stale worktree metadata.
   init [dir] [--repo PATH]        Mark a directory for new worktrees; supply --repo when outside the repo.
   help|-h|--help                  Show this help message.
 
@@ -245,7 +245,7 @@ cmd_list() {
   git_cmd worktree list "$@"
 }
 
-cmd_create() {
+cmd_add() {
   ensure_marker_loaded
 
   local branch=""
@@ -274,7 +274,7 @@ cmd_create() {
         exit 0
         ;;
       -*)
-        die "Unknown option '$1' for create."
+        die "Unknown option '$1' for add."
         ;;
       *)
         if [[ -n "$branch" ]]; then
@@ -438,19 +438,19 @@ main() {
   shift || true
 
   case "$command" in
-    list|ls|l)
+    list|ls)
       cmd_list "$@"
       ;;
-    create|add|new|c)
-      cmd_create "$@"
+    add)
+      cmd_add "$@"
       ;;
-    remove|rm|delete|del|r)
+    remove|rm)
       cmd_remove "$@"
       ;;
-    move|mv|update|m)
+    move|mv)
       cmd_move "$@"
       ;;
-    prune|p)
+    prune)
       cmd_prune "$@"
       ;;
     init)
