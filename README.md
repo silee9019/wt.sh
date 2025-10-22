@@ -12,30 +12,32 @@ Small Bash wrapper around `git worktree` that makes it easy to spin up, inspect,
 
 ## Installation
 
-1. Clone or download this repository.
-2. Add the directory to your `PATH`, or symlink the script somewhere already on your `PATH`:
+1. Clone this repository:
    ```bash
-   ln -s /path/to/wt.sh/wt /usr/local/bin/wt
+   git clone https://github.com/silee9019/wt.sh.git
+   ```
+2. Enter the directory:
+   ```bash
+   cd wt.sh
+   ```
+3. Run the installer:
+   ```bash
+   ./install.sh
    ```
 
 ## Usage
 
 Run `wt help` to see the built-in usage guide.
 
-```bash
-Usage: wt <command> [options]
+### CLI usage
 
-Commands:
-  list|ls [--porcelain]           List registered worktrees.
-  add <branch> [--path DIR] [--from REF] [--force]
-                                  Create a worktree (new branch if missing).
-  remove|rm <dir> [--force]
-                                  Remove a worktree directory.
-  move|mv <dir> <new-path>
-                                  Move/rename a worktree directory.
-  prune [--dry-run]               Prune stale worktree metadata.
-  init [dir] [--repo PATH]        Mark a directory for new worktrees; supply --repo when outside the repo.
-  help|-h|--help                  Show this help message.
+```bash
+wt add feature-branch
+wt ls
+wt move dev dev-old
+wt remove dev-old
+wt prune --dry-run
+wt init --repo ./main
 ```
 
 ### Common workflows
@@ -58,43 +60,3 @@ All commands require a `.wt` marker. The marker's directory becomes the default 
 
 - Bash 4+
 - Git with worktree support (Git 2.5+)
-
-## Shell completion
-
-### Bash
-
-1. Copy or symlink `completions/wt.bash` somewhere on disk (for example `~/.bash_completion.d/wt`):
-   ```bash
-   ln -s /path/to/wt.sh/completions/wt.bash ~/.bash_completion.d/wt
-   ```
-2. Source the script from your `~/.bashrc` (create the directory if needed):
-   ```bash
-   mkdir -p ~/.bash_completion.d
-   grep -q wt.bash ~/.bashrc || echo 'source ~/.bash_completion.d/wt' >> ~/.bashrc
-   ```
-3. Reload your shell (or `source ~/.bashrc`) to activate the completion.
-
-### Zsh
-
-1. Copy or symlink `completions/_wt` into a directory listed in your `fpath` (for example `~/.zsh/completions/_wt`):
-   ```bash
-   ln -s /path/to/wt.sh/completions/_wt ~/.zsh/completions/_wt
-   ```
-2. Ensure that directory is in `fpath`, then reload completions:
-   ```zsh
-   fpath=(~/.zsh/completions $fpath)
-   autoload -Uz compinit && compinit
-   ```
-3. Restart your shell (or `exec zsh`) and `wt` will offer completions for commands, options, branches, and worktree directories.
-
-### oh-my-zsh
-
-1. Place the zsh completion in `$ZSH_CUSTOM/completions` (create it if it does not exist):
-   ```bash
-   ln -s /path/to/wt.sh/completions/_wt ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/completions/_wt
-   ```
-2. Ensure the directory is in `fpath` (oh-my-zsh adds `$ZSH_CUSTOM/completions` automatically when it exists). Reload completions:
-   ```zsh
-   autoload -Uz compinit && compinit
-   ```
-3. Restart your shell or run `exec zsh`.
