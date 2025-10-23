@@ -22,8 +22,8 @@ Usage: $SCRIPT_NAME <command> [options]
 
 Commands:
   list|ls [--porcelain]           List registered worktree directories.
-  add <branch> [--path DIR] [--from REF]
-                                  Create a new worktree (branch required).
+  add <type> --title TITLE [--id ID] [--base REF]
+                                  Create a worktree by branching from REF (defaults to the repo default).
   remove|rm <dir>
                                   Remove a worktree directory.
   move|mv <dir> <new-path>
@@ -222,6 +222,40 @@ sanitize_path() {
   echo "$name"
 }
 
+collapse_hyphen_runs() {
+  local value="$1"
+  while [[ "$value" == *--* ]]; do
+    value="${value//--/-}"
+  done
+  while [[ "$value" == -* ]]; do
+    value="${value#-}"
+  done
+  while [[ "$value" == *- ]]; do
+    value="${value%-}"
+  done
+  printf '%s' "$value"
+}
+
+format_branch_id() {
+  local value="$1"
+  value="$(trim_whitespace "$value")"
+  value="${value//\//-}"
+  value="${value//[[:space:]]/-}"
+  value="$(printf '%s' "$value" | tr '[:lower:]' '[:upper:]')"
+  value="$(collapse_hyphen_runs "$value")"
+  printf '%s' "$value"
+}
+
+format_branch_title() {
+  local value="$1"
+  value="$(trim_whitespace "$value")"
+  value="${value//\//-}"
+  value="${value//[[:space:]]/-}"
+  value="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
+  value="$(collapse_hyphen_runs "$value")"
+  printf '%s' "$value"
+}
+
 resolve_worktree_path() {
   local input="$1"
 
@@ -248,20 +282,26 @@ cmd_list() {
 cmd_add() {
   ensure_marker_loaded
 
-  local branch=""
-  local start_point=""
-  local target_path=""
+  local type=""
+  local identifier=""
+  local raw_title=""
+  local base_ref=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --path)
-        [[ $# -ge 2 ]] || die "--path requires a directory."
-        target_path="$2"
+      --id)
+        [[ $# -ge 2 ]] || die "--id requires a value."
+        identifier="$2"
         shift 2
         ;;
-      --from)
-        [[ $# -ge 2 ]] || die "--from requires a ref."
-        start_point="$2"
+      --title)
+        [[ $# -ge 2 ]] || die "--title requires a value."
+        raw_title="$2"
+        shift 2
+        ;;
+      --base)
+        [[ $# -ge 2 ]] || die "--base requires a ref."
+        base_ref="$2"
         shift 2
         ;;
       --help|-h)
@@ -272,36 +312,50 @@ cmd_add() {
         die "Unknown option '$1' for add."
         ;;
       *)
-        if [[ -n "$branch" ]]; then
-          die "Multiple branch names provided."
+        if [[ -n "$type" ]]; then
+          die "Multiple branch types provided."
         fi
-        branch="$1"
+        type="$1"
         shift
         ;;
     esac
   done
 
-  [[ -n "$branch" ]] || die "Branch name is required."
+  type="$(trim_whitespace "$type")"
+  [[ -n "$type" ]] || die "Branch type is required (e.g. 'feature')."
+  type="${type//[[:space:]]/-}"
+  type="${type//\//-}"
+  type="$(collapse_hyphen_runs "$type")"
+  [[ -n "$type" ]] || die "Branch type cannot be empty."
 
-  if [[ -z "$target_path" ]]; then
-    target_path="$WORKTREE_BASE_DIR/$(sanitize_path "$branch")"
-  elif [[ "$target_path" != /* ]]; then
-    target_path="$WORKTREE_BASE_DIR/$target_path"
+  [[ -n "$raw_title" ]] || die "--title is required."
+
+  local formatted_title formatted_id branch_suffix branch start_point target_path
+  formatted_title="$(format_branch_title "$raw_title")"
+  [[ -n "$formatted_title" ]] || die "Title produces an empty branch segment."
+
+  if [[ -n "$identifier" ]]; then
+    formatted_id="$(format_branch_id "$identifier")"
+    [[ -n "$formatted_id" ]] || die "--id produces an empty identifier."
+    branch_suffix="$formatted_id-$formatted_title"
+  else
+    branch_suffix="$formatted_title"
   fi
 
+  branch="$type/$branch_suffix"
+
+  if [[ -n "$base_ref" ]]; then
+    start_point="$base_ref"
+  else
+    start_point="$(default_start_point)"
+  fi
+
+  target_path="$WORKTREE_BASE_DIR/$(sanitize_path "$branch")"
   [[ ! -e "$target_path" ]] || die "Target path '$target_path' already exists."
 
   if git_cmd show-ref --verify --quiet "refs/heads/$branch"; then
     git_cmd worktree add "$target_path" "$branch"
     return
-  fi
-
-  if [[ -z "$start_point" ]]; then
-    if git_cmd show-ref --verify --quiet "refs/remotes/origin/$branch"; then
-      start_point="origin/$branch"
-    else
-      start_point="$(default_start_point)"
-    fi
   fi
 
   git_cmd worktree add -b "$branch" "$target_path" "$start_point"

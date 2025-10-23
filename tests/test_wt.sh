@@ -69,21 +69,24 @@ test_add_list_move_remove_flow() (
   create_fixture
   run_init
 
-  wt_in_base add "feature/foo" >/dev/null
+  local default_branch
+  default_branch="$(git -C "$FIXTURE_REPO" symbolic-ref --short HEAD)"
 
-  local worktree_dir="$FIXTURE_BASE/feature-foo"
+  wt_in_base add feature --id ticket-1234 --title "Fix Email BUG" --base "$default_branch" >/dev/null
+
+  local worktree_dir="$FIXTURE_BASE/feature-TICKET-1234-fix-email-bug"
   [[ -d "$worktree_dir" ]] || fail "worktree directory not created"
-  git -C "$FIXTURE_REPO" show-ref --verify --quiet "refs/heads/feature/foo" || fail "branch feature/foo not created"
+  git -C "$FIXTURE_REPO" show-ref --verify --quiet "refs/heads/feature/TICKET-1234-fix-email-bug" || fail "branch feature/TICKET-1234-fix-email-bug not created"
 
   local branch
   branch="$(git -C "$worktree_dir" rev-parse --abbrev-ref HEAD)"
-  [[ "$branch" == "feature/foo" ]] || fail "expected branch feature/foo, got $branch"
+  [[ "$branch" == "feature/TICKET-1234-fix-email-bug" ]] || fail "expected branch feature/TICKET-1234-fix-email-bug, got $branch"
 
   local list_output
   list_output="$(wt_in_base ls --porcelain)"
   echo "$list_output" | grep -q "$worktree_dir" || fail "worktree not listed in porcelain output"
 
-  wt_in_base move feature-foo moved >/dev/null
+  wt_in_base move feature-TICKET-1234-fix-email-bug moved >/dev/null
   [[ -d "$FIXTURE_BASE/moved" ]] || fail "worktree not moved to target directory"
   [[ ! -d "$worktree_dir" ]] || fail "old worktree directory still present"
 

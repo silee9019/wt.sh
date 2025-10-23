@@ -199,7 +199,7 @@ _wt_all_command_entries=(
 
 _wt_resolved_command() {
   local candidate=$1
-  if [[ -n ${_wt_alias_map[$candidate]} ]]; then
+  if [[ -n ${_wt_alias_map[$candidate]-} ]]; then
     REPLY=${_wt_alias_map[$candidate]}
   else
     REPLY=$candidate
@@ -232,11 +232,11 @@ _wt() {
           ;;
         add)
           _arguments -C \
-            '--path[Directory for the new worktree]:directory:_wt_relative_paths' \
-            '--from[Starting point for the branch]:ref:_wt_git_refs' \
+            '--id[Identifier to include in the branch name]:identifier:' \
+            '--title[Title segment for the branch name]:title:' \
+            '--base[Base ref to branch from]:ref:_wt_git_refs' \
             '--help[Show usage information]' \
-            '1:branch name:_wt_git_refs' \
-            '2::directory:_wt_relative_paths' && ret=0
+            '1:branch type:' && ret=0
           ;;
         remove)
           _arguments \

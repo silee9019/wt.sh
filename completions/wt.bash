@@ -221,18 +221,18 @@ _wt_complete() {
       ;;
     add)
       case "$prev" in
-        --path)
-          __wt_relative_dirs "$cur"
-          return
-          ;;
-        --from)
+        --base)
           __wt_git_refs "$cur" && return
+          ;;
+        --id|--title)
+          COMPREPLY=()
+          return
           ;;
       esac
       if [[ "$cur" == -* ]]; then
-        COMPREPLY=( $(compgen -W "--path --from --help" -- "$cur") )
+        COMPREPLY=( $(compgen -W "--id --title --base --help" -- "$cur") )
       else
-        __wt_git_refs "$cur" || COMPREPLY=()
+        COMPREPLY=()
       fi
       ;;
     remove|rm)
