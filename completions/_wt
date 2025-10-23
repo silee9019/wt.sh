@@ -3,6 +3,13 @@
 local _wt_marker_cache_dir=""
 local _wt_marker_cache_repo=""
 
+_wt_trim_whitespace() {
+  local str="$1"
+  str="${str#"${str%%[![:space:]]*}"}"
+  str="${str%"${str##*[![:space:]]}"}"
+  REPLY="$str"
+}
+
 _wt_find_marker_base() {
   local dir=$PWD
   while [[ $dir != "/" ]]; do
@@ -56,17 +63,34 @@ _wt_repo_dir() {
   fi
   base=$REPLY
 
+  local resolved_base
+  if ! resolved_base="$(builtin cd "$base" 2>/dev/null && pwd)"; then
+    return 1
+  fi
+
   if ! _wt_parse_marker_value repo; then
     return 1
   fi
   repo=$REPLY
-  if [[ "$repo" != /* ]]; then
-    repo="$base/$repo"
+  _wt_trim_whitespace "$repo"
+  repo=$REPLY
+
+  if [[ "$repo" == "~"* ]]; then
+    repo=${~repo}
   fi
 
-  _wt_marker_cache_dir="$base"
-  _wt_marker_cache_repo="$repo"
-  REPLY="$repo"
+  if [[ "$repo" != /* ]]; then
+    repo="$resolved_base/$repo"
+  fi
+
+  local resolved_repo
+  if ! resolved_repo="$(builtin cd "$repo" 2>/dev/null && pwd)"; then
+    return 1
+  fi
+
+  _wt_marker_cache_dir="$resolved_base"
+  _wt_marker_cache_repo="$resolved_repo"
+  REPLY="$resolved_repo"
   return 0
 }
 
@@ -117,21 +141,70 @@ _wt_git_refs() {
     return 1
   fi
   repo=$REPLY
-  local -a refs
-  refs=("${(@f)$(git -C "$repo" for-each-ref --format='%(refname:short)' refs/heads refs/remotes 2>/dev/null)}")
-  (( $#refs )) || return 1
-  compadd "$@" -a refs
+  local head
+  head=$(git -C "$repo" symbolic-ref --quiet --short HEAD 2>/dev/null)
+  local -a raw_refs entries
+  raw_refs=("${(@f)$(git -C "$repo" for-each-ref --format='%(refname:short)%09%(refname)' refs/heads refs/remotes 2>/dev/null)}")
+  (( $#raw_refs )) || return 1
+
+  local ref details name branch_desc
+  for ref in $raw_refs; do
+    name="${ref%%$'\t'*}"
+    details="${ref#*$'\t'}"
+    branch_desc="branch"
+    if [[ "$details" == refs/heads/* ]]; then
+      branch_desc="local branch"
+    elif [[ "$details" == refs/remotes/* ]]; then
+      branch_desc="remote branch"
+    fi
+    if [[ -n "$head" && "$name" == "$head" ]]; then
+      branch_desc="* current branch"
+    fi
+    entries+=("$name:$branch_desc")
+  done
+
+  _describe -t wt-git-refs 'git ref' entries "$@"
 }
 
-_wt_commands=(
-  'list|ls:List registered worktree directories'
+typeset -A _wt_alias_map=(
+  [ls]=list
+  [rm]=remove
+  [mv]=move
+  [-h]=help
+  [--help]=help
+)
+
+_wt_primary_commands=(
+  'list:List registered worktree directories'
   'add:Create a new worktree'
-  'remove|rm:Remove a worktree directory'
-  'move|mv:Move or rename a worktree directory'
+  'remove:Remove a worktree directory'
+  'move:Move or rename a worktree directory'
   'prune:Prune stale worktree metadata'
   'init:Mark or update the worktree base directory'
-  'help|-h|--help:Show help'
+  'help:Show help'
+  'ls:List registered worktree directories'
+  'rm:Remove a worktree directory'
+  'mv:Move or rename a worktree directory'
 )
+
+_wt_option_entries=(
+  '-h:Show help'
+  '--help:Show help'
+)
+
+_wt_all_command_entries=(
+  "${_wt_primary_commands[@]}"
+  "${_wt_option_entries[@]}"
+)
+
+_wt_resolved_command() {
+  local candidate=$1
+  if [[ -n ${_wt_alias_map[$candidate]} ]]; then
+    REPLY=${_wt_alias_map[$candidate]}
+  else
+    REPLY=$candidate
+  fi
+}
 
 _wt() {
   local curcontext="$curcontext" state ret=1
@@ -143,13 +216,16 @@ _wt() {
 
   case $state in
     cmds)
-      _describe -t commands 'wt command' _wt_commands
+      _describe -t wt-commands 'wt command' _wt_all_command_entries
       ret=0
       ;;
     args)
       local cmd=${words[2]}
+      [[ -z $cmd ]] && return ret
+      _wt_resolved_command "$cmd"
+      cmd=$REPLY
       case $cmd in
-        list|ls)
+        list)
           _arguments \
             '--porcelain[Output in porcelain format]' \
             '--help[Show usage information]' && ret=0
@@ -163,13 +239,13 @@ _wt() {
             '1:branch name:_wt_git_refs' \
             '2::directory:_wt_relative_paths' && ret=0
           ;;
-        remove|rm)
+        remove)
           _arguments \
             '--force[Force removal even if dirty]' \
             '--help[Show usage information]' \
             '1:worktree directory:_wt_worktree_dirs' && ret=0
           ;;
-        move|mv)
+        move)
           _arguments \
             '--help[Show usage information]' \
             '1:worktree directory:_wt_worktree_dirs' \
@@ -186,8 +262,8 @@ _wt() {
             '--help[Show usage information]' \
             '1::base directory:_files -/' && ret=0
           ;;
-        help|-h|--help)
-          _describe -t commands 'wt command' _wt_commands
+        help)
+          _describe -t wt-help-commands 'wt command' _wt_all_command_entries
           ret=0
           ;;
         *)

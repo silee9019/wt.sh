@@ -3,6 +3,13 @@
 __wt_marker_cache_dir=""
 __wt_marker_cache_repo=""
 
+__wt_trim_whitespace() {
+  local str="$1"
+  str="${str#"${str%%[![:space:]]*}"}"
+  str="${str%"${str##*[![:space:]]}"}"
+  REPLY="$str"
+}
+
 __wt_marker_base() {
   local dir="$PWD"
   while :; do
@@ -59,17 +66,72 @@ __wt_repo_dir() {
   fi
   base="$REPLY"
 
+  local resolved_base
+  if ! resolved_base="$(cd "$base" 2>/dev/null && pwd)"; then
+    return 1
+  fi
+
   if ! __wt_marker_value repo; then
     return 1
   fi
   repo="$REPLY"
+  __wt_trim_whitespace "$repo"
+  repo="$REPLY"
+
+  case "$repo" in
+    "~")
+      repo="$HOME"
+      ;;
+    "~/"*)
+      repo="$HOME/${repo#~/}"
+      ;;
+    "~"*)
+      local user_part remainder user user_home
+      user_part="${repo%%/*}"
+      user="${user_part#~}"
+      remainder=""
+      if [[ "$repo" == */* ]]; then
+        remainder="${repo#*/}"
+      fi
+      if command -v python3 >/dev/null 2>&1; then
+        user_home="$(USER_NAME="$user" python3 - <<'PY'
+import os
+import pwd
+import sys
+
+username = os.environ.get("USER_NAME")
+try:
+    print(pwd.getpwnam(username).pw_dir)
+except (KeyError, TypeError):
+    sys.exit(1)
+PY
+)" || return 1
+      else
+        if [[ "$user" =~ [^A-Za-z0-9._-] ]]; then
+          return 1
+        fi
+        user_home="$(eval printf '%s\n' ~"$user")" || return 1
+      fi
+      if [[ -n "$remainder" ]]; then
+        repo="$user_home/$remainder"
+      else
+        repo="$user_home"
+      fi
+      ;;
+  esac
+
   if [[ "$repo" != /* ]]; then
-    repo="$base/$repo"
+    repo="$resolved_base/$repo"
   fi
 
-  __wt_marker_cache_dir="$base"
-  __wt_marker_cache_repo="$repo"
-  REPLY="$repo"
+  local resolved_repo
+  if ! resolved_repo="$(cd "$repo" 2>/dev/null && pwd)"; then
+    return 1
+  fi
+
+  __wt_marker_cache_dir="$resolved_base"
+  __wt_marker_cache_repo="$resolved_repo"
+  REPLY="$resolved_repo"
   return 0
 }
 
