@@ -234,14 +234,12 @@ _wt() {
           _arguments -C \
             '--path[Directory for the new worktree]:directory:_wt_relative_paths' \
             '--from[Starting point for the branch]:ref:_wt_git_refs' \
-            '--force[Force creation if branch exists]' \
             '--help[Show usage information]' \
             '1:branch name:_wt_git_refs' \
             '2::directory:_wt_relative_paths' && ret=0
           ;;
         remove)
           _arguments \
-            '--force[Force removal even if dirty]' \
             '--help[Show usage information]' \
             '1:worktree directory:_wt_worktree_dirs' && ret=0
           ;;

@@ -230,14 +230,14 @@ _wt_complete() {
           ;;
       esac
       if [[ "$cur" == -* ]]; then
-        COMPREPLY=( $(compgen -W "--path --from --force --help" -- "$cur") )
+        COMPREPLY=( $(compgen -W "--path --from --help" -- "$cur") )
       else
         __wt_git_refs "$cur" || COMPREPLY=()
       fi
       ;;
     remove|rm)
       if [[ "$cur" == -* ]]; then
-        COMPREPLY=( $(compgen -W "--force --help" -- "$cur") )
+        COMPREPLY=( $(compgen -W "--help" -- "$cur") )
       else
         __wt_worktree_dirs "$cur" || COMPREPLY=()
       fi

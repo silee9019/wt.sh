@@ -22,9 +22,9 @@ Usage: $SCRIPT_NAME <command> [options]
 
 Commands:
   list|ls [--porcelain]           List registered worktree directories.
-  add <branch> [--path DIR] [--from REF] [--force]
+  add <branch> [--path DIR] [--from REF]
                                   Create a new worktree (branch required).
-  remove|rm <dir> [--force]
+  remove|rm <dir>
                                   Remove a worktree directory.
   move|mv <dir> <new-path>
                                   Move/rename a worktree directory.
@@ -251,7 +251,6 @@ cmd_add() {
   local branch=""
   local start_point=""
   local target_path=""
-  local force_flag=()
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -264,10 +263,6 @@ cmd_add() {
         [[ $# -ge 2 ]] || die "--from requires a ref."
         start_point="$2"
         shift 2
-        ;;
-      --force)
-        force_flag=(--force)
-        shift
         ;;
       --help|-h)
         print_usage
@@ -296,10 +291,8 @@ cmd_add() {
 
   [[ ! -e "$target_path" ]] || die "Target path '$target_path' already exists."
 
-  local add_args=("${force_flag[@]}")
-
   if git_cmd show-ref --verify --quiet "refs/heads/$branch"; then
-    git_cmd worktree add "${add_args[@]}" "$target_path" "$branch"
+    git_cmd worktree add "$target_path" "$branch"
     return
   fi
 
@@ -311,20 +304,14 @@ cmd_add() {
     fi
   fi
 
-  add_args+=(-b "$branch")
-  git_cmd worktree add "${add_args[@]}" "$target_path" "$start_point"
+  git_cmd worktree add -b "$branch" "$target_path" "$start_point"
 }
 
 cmd_remove() {
-  local force_flag=()
   local target=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --force)
-        force_flag=(--force)
-        shift
-        ;;
       --help|-h)
         print_usage
         exit 0
@@ -347,7 +334,7 @@ cmd_remove() {
   local resolved
   resolved="$(resolve_worktree_path "$target")"
 
-  git_cmd worktree remove "${force_flag[@]}" "$resolved"
+  git_cmd worktree remove "$resolved"
 }
 
 cmd_move() {
