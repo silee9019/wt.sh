@@ -1,5 +1,18 @@
 # wt CLI Specification
 
+## Overview
+
+This document specifies the behaviour of the `wt` Bash script, which serves as a wrapper around `git worktree` to facilitate managing Git worktrees in a structured manner. It outlines the expected functionality, configuration, and error handling for users and developers interacting with the `wt` command-line interface.
+
+## Conventions
+
+- Anchor explanations in this specification; only reference implementation specifics when they clarify or highlight divergence from the documented contract.
+- Treat `.wt` marker invariants as non-negotiable: both `marker_base_dir` and `primary_repo_dir` keys must exist, and `marker_base_dir` must equal the containing marker directory.
+- When discussing derived directories, prefer the spec identifiers `WT_MARKER_BASE_DIR` and `WT_PRIMARY_REPO_DIR`, while cross-referencing the current script variables (`WORKTREE_BASE_DIR`, `REPO_DIR`) where helpful.
+- Distinguish paths, branch names, and sanitized filesystem names explicitly, describing how user input maps to on-disk directories.
+- Cover marker discovery, validation, and error handling with the same level of precision the script enforces.
+- Apply general documentation practices: use concise American English, backticks for commands and flags, and fenced code blocks with info strings for multi-line snippets.
+
 ## Scope
 
 - Defines the behaviour of the `wt` Bash entrypoint that wraps `git worktree`.
@@ -9,25 +22,25 @@
 ## Terminology
 
 - **Marker directory**: Directory that contains `.wt`. New worktrees are created as children here.
-- **Repository directory**: Absolute path recorded in `.wt` under `repo:`. All Git commands run with `git -C <repo>`.
-- **Marker file (`.wt`)**: Two key/value entries:
+- **Repository directory**: Absolute path recorded in `.wt` under `primary_repo_dir:`. All Git commands run with `git -C <primary_repo_dir>`.
+- **Marker file (`.wt`)**: Two required key/value entries:
   ```
   # wt base marker
-  base: <absolute path of marker directory>
-  repo: <absolute path of primary repository>
+  marker_base_dir: <absolute path of marker directory>
+  primary_repo_dir: <absolute path of primary repository>
   ```
-  `base:` must either match the marker directory or be omitted. `repo:` must resolve to a path whose `.git` exists.
+  `marker_base_dir:` must match the marker directory. `primary_repo_dir:` must resolve to a path whose `.git` exists.
 
 ## Marker Discovery and Validation
 
 - On every command (except `init` without an existing marker), `wt` searches from `$PWD` upward for the nearest `.wt`.
 - The marker is parsed; whitespace is trimmed; comment fragments (`# ...`) and blank lines are ignored.
-- Relative `base:` or `repo:` entries are resolved based on the marker location.
-- The resolved `base:` must equal the directory holding `.wt`; otherwise the command aborts.
-- The resolved `repo:` must exist and contain `.git`; otherwise the command aborts.
+- Relative `marker_base_dir:` or `primary_repo_dir:` entries are resolved based on the marker location.
+- The resolved `marker_base_dir:` must equal the directory holding `.wt`; otherwise the command aborts.
+- The resolved `primary_repo_dir:` must exist and contain `.git`; otherwise the command aborts.
 - After validation, the script captures:
-  - `WORKTREE_BASE_DIR`: marker directory
-  - `REPO_DIR`: repository path used for all Git commands
+  - `WT_MARKER_BASE_DIR`: absolute path of the marker directory
+  - `WT_PRIMARY_REPO_DIR`: repository path used for all Git commands
 
 ## Repository Auto-Detection (for `init`)
 
@@ -39,7 +52,7 @@
 
 ## Path Naming Rules
 
-- Target worktree directory path is `WORKTREE_BASE_DIR/` plus a sanitized copy of the full branch name available on file system.
+- Target worktree directory path is `WT_MARKER_BASE_DIR/` plus a sanitized copy of the full branch name available on file system.
 
 ## Default Base Branch Resolution
 
@@ -85,10 +98,10 @@ The CLI only implements the commands documented below.
 - Resolves both `dir` and `PATH` (when present) to absolute paths.
 - When `--repo` is omitted, uses repository auto-detection as described earlier.
 - Validates that the target repository path contains `.git`.
-- Writes (or overwrites) `<dir>/.wt` with the canonicalized base and repo paths.
-- Prints a one-line confirmation: `Marked <base> for new worktrees (repo: <repo>).`
+- Writes (or overwrites) `<dir>/.wt` with the canonicalized marker and repository paths.
+- Prints a one-line confirmation: `Marked <marker_base_dir> for new worktrees (repo: <primary_repo_dir>).`
 
-### `wt help | wt -h | wt --help`
+### `wt -h | wt --help`
 
 - Prints the usage block defined in the script and exits with status `0`.
 
